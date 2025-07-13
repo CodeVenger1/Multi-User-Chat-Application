@@ -1,0 +1,29 @@
+# CMake build directories
+# /build/
+# /cmake-build-debug/
+# /cmake-build-release/
+# /CMakeCache.txt
+# /CMakeFiles/
+# /install/
+# /Makefile
+# cmake_install.cmake
+
+# Visual Studio files (if you use VS)
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.suo
+*.user
+*.ilk
+*.pdb
+*.VC.db
+*.VC.VC.opendb
+
+# IDE specific files (e.g., VS Code, CLion)
+.vscode/
+.idea/
+
+# Operating System generated files
+Thumbs.db # Windows
