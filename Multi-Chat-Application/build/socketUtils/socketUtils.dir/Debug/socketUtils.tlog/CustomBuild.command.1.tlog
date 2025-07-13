@@ -1,6 +1,6 @@
-^C:\USERS\SUDDA\ONEDRIVE\DESKTOP\C++\SOCKET_PROGRAMMING\SOCKETUTILS\CMAKELISTS.TXT
+^C:\USERS\SUDDA\ONEDRIVE\DESKTOP\C++\CHAT-APPLICATION\MULTI-CHAT-APPLICATION\SOCKETUTILS\CMAKELISTS.TXT
 setlocal
-C:\Users\sudda\Downloads\winlibs-x86_64-posix-seh-gcc-13.2.0-llvm-17.0.6-mingw-w64ucrt-11.0.1-r5\mingw64\bin\cmake.exe -SC:/Users/sudda/OneDrive/Desktop/c++/Socket_Programming -BC:/Users/sudda/OneDrive/Desktop/c++/Socket_Programming/build --check-stamp-file C:/Users/sudda/OneDrive/Desktop/c++/Socket_Programming/build/socketUtils/CMakeFiles/generate.stamp
+C:\Users\sudda\Downloads\winlibs-x86_64-posix-seh-gcc-13.2.0-llvm-17.0.6-mingw-w64ucrt-11.0.1-r5\mingw64\bin\cmake.exe -SC:/Users/sudda/OneDrive/Desktop/c++/Chat-Application/Multi-Chat-Application -BC:/Users/sudda/OneDrive/Desktop/c++/Chat-Application/Multi-Chat-Application/build --check-stamp-file C:/Users/sudda/OneDrive/Desktop/c++/Chat-Application/Multi-Chat-Application/build/socketUtils/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone

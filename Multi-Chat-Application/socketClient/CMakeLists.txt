@@ -1,6 +1,6 @@
 # Define the client executable target
 # This will compile client.cpp into an executable named 'ChatClient'
-add_executable(ChatClient hi.cpp)
+add_executable(ChatClient client.cpp)
 
 # Link the client executable to the socketUtils library
 target_link_libraries(ChatClient PRIVATE socketUtils)

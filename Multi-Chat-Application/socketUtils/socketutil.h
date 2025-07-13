@@ -3,9 +3,13 @@
 
 
 #include <iostream>
-#include<string>
+#include <string>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <thread>
+#include <vector>
+#include <mutex>
+#include <algorithm>
 using namespace std;
 #pragma comment(lib, "Ws2_32.lib")
 

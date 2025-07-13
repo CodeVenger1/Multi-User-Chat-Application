@@ -1,4 +1,4 @@
-# Install script for directory: C:/Users/sudda/OneDrive/Desktop/c++/Socket_Programming/socketClient
+# Install script for directory: C:/Users/sudda/OneDrive/Desktop/c++/Chat-Application/Multi-Chat-Application/socketClient
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)

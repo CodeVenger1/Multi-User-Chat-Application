@@ -1,6 +1,6 @@
 # Define the server executable target
 # This will compile server.cpp into an executable named 'ChatServer'
-add_executable(ChatServer main.cpp)
+add_executable(ChatServer server.cpp)
 
 # Link the server executable to the socketUtils library
 # This makes functions from socketUtils (like printWinsockError) available to ChatServer
