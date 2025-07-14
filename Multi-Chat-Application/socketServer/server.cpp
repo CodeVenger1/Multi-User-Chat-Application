@@ -1,10 +1,12 @@
 #include "socketutil.h"
 
-map<SOCKET, string> clientNicknames;
-mutex nicknamesMutex;
+struct ClientState {
+    string nickname;
+    int currentRoomNumber;
+};
 
-vector<SOCKET> connectedClientSockets;
-mutex clientSocketsMutex;
+map<SOCKET, ClientState> clientStates;
+mutex clientStatesMutex;
 
 struct AcceptedSocket {
     SOCKET acceptedSocketFD;
@@ -12,6 +14,15 @@ struct AcceptedSocket {
     int errorCode;
     bool accepted;
 };
+
+string trim(const string& str) {
+    size_t first = str.find_first_not_of(" \n\r\t");
+    if (string::npos == first) {
+        return "";
+    }
+    size_t last = str.find_last_not_of(" \n\r\t");
+    return str.substr(first, (last - first + 1));
+}
 
 AcceptedSocket AcceptIncomeingConnection(SOCKET serverSocketFD) {
     AcceptedSocket result;
@@ -33,21 +44,136 @@ AcceptedSocket AcceptIncomeingConnection(SOCKET serverSocketFD) {
     return result;
 }
 
-void broadcastMessage(const string& message, SOCKET senderSocketFD) {
-    lock_guard<mutex> lock(clientSocketsMutex);
+void broadcastMessage(const string& message, SOCKET senderSocketFD, int targetRoomNumber) {
+    lock_guard<mutex> lock(clientStatesMutex);
 
-    for (SOCKET client_sock : connectedClientSockets) {
-        if (client_sock != senderSocketFD) {
-            int bytesSent = send(client_sock, message.c_str(), message.length(), 0);
+    for (const auto& pair : clientStates) {
+        SOCKET targetSocket = pair.first;
+        const ClientState& state = pair.second;
+
+        if (state.currentRoomNumber == targetRoomNumber && targetSocket != senderSocketFD) {
+            int bytesSent = send(targetSocket, message.c_str(), message.length(), 0);
             if (bytesSent == SOCKET_ERROR) {
-                cerr << "send to client " << client_sock << " failed with error: " << WSAGetLastError() << endl;
+                cerr << "send to client " << targetSocket << " in room " << targetRoomNumber << " failed with error: " << WSAGetLastError() << endl;
             }
         }
     }
 }
 
+string getUsersInRoom(int roomNumber, const string& excludeNickname) {
+    string userList = "";
+    lock_guard<mutex> lock(clientStatesMutex);
+    vector<string> nicknamesInRoom;
+
+    for (const auto& pair : clientStates) {
+        const ClientState& state = pair.second;
+        if (state.currentRoomNumber == roomNumber && state.nickname != excludeNickname) {
+            nicknamesInRoom.push_back(state.nickname);
+        }
+    }
+
+    for (size_t i = 0; i < nicknamesInRoom.size(); ++i) {
+        userList += nicknamesInRoom[i];
+        if (i < nicknamesInRoom.size() - 1) {
+            userList += ",";
+        }
+    }
+    return userList;
+}
+
+bool handleClientCommand(SOCKET clientSocketFD, const string& commandMessage, const string& clientNickname) {
+    string trimmedCommand = trim(commandMessage);
+
+    if (trimmedCommand.rfind("COMMAND:JOIN:", 0) == 0) {
+        string roomNumberStr = trim(trimmedCommand.substr(13));
+        int newRoomNumber;
+
+        try {
+            newRoomNumber = stoi(roomNumberStr);
+            if (newRoomNumber <= 0) {
+                string response = "ERROR: Room number must be a positive integer.\n";
+                send(clientSocketFD, response.c_str(), response.length(), 0);
+                return true;
+            }
+        } catch (const invalid_argument& e) {
+            string response = "ERROR: Invalid room number format. Please enter a number.\n";
+            send(clientSocketFD, response.c_str(), response.length(), 0);
+            return true;
+        } catch (const out_of_range& e) {
+            string response = "ERROR: Room number out of valid range.\n";
+            send(clientSocketFD, response.c_str(), response.length(), 0);
+            return true;
+        }
+
+        unique_lock<mutex> lock(clientStatesMutex);
+        auto it = clientStates.find(clientSocketFD);
+        int oldRoomNumber = 0;
+        if (it != clientStates.end()) {
+            oldRoomNumber = it->second.currentRoomNumber;
+            if (oldRoomNumber != newRoomNumber) {
+                it->second.currentRoomNumber = newRoomNumber;
+
+                lock.unlock();
+
+                if (oldRoomNumber != 0) {
+                    string leaveMsg = clientNickname + " has left room number '" + to_string(oldRoomNumber) + "'.\n";
+                    broadcastMessage(leaveMsg, clientSocketFD, oldRoomNumber);
+                }
+
+                string joinMsg = clientNickname + " has joined room number '" + to_string(newRoomNumber) + "'.\n";
+                broadcastMessage(joinMsg, clientSocketFD, newRoomNumber);
+
+            } else {
+                string response = "INFO: You are already in room number '" + to_string(newRoomNumber) + "'.\n";
+                send(clientSocketFD, response.c_str(), response.length(), 0);
+            }
+        }
+        string response = "ROOM_JOINED:" + to_string(newRoomNumber) + "\n";
+        send(clientSocketFD, response.c_str(), response.length(), 0);
+
+        string userList = getUsersInRoom(newRoomNumber, clientNickname);
+        string userListMsg = "USER_LIST:" + to_string(newRoomNumber) + ":" + userList + "\n";
+        send(clientSocketFD, userListMsg.c_str(), userListMsg.length(), 0);
+
+        cout << "Client " << clientNickname << " moved from room '" << oldRoomNumber << "' to '" << newRoomNumber << "'." << endl;
+        return true;
+    }
+    else if (trimmedCommand == "COMMAND:LEAVE") {
+        unique_lock<mutex> lock(clientStatesMutex);
+        auto it = clientStates.find(clientSocketFD);
+        if (it != clientStates.end()) {
+            int oldRoomNumber = it->second.currentRoomNumber;
+            if (oldRoomNumber != 0) {
+                it->second.currentRoomNumber = 0;
+
+                lock.unlock();
+
+                string leaveMsg = clientNickname + " has left room number '" + to_string(oldRoomNumber) + "'.\n";
+                broadcastMessage(leaveMsg, clientSocketFD, oldRoomNumber);
+
+                string response = "ROOM_LEFT:" + to_string(oldRoomNumber) + "\n";
+                send(clientSocketFD, response.c_str(), response.length(), 0);
+
+                string userListLobby = getUsersInRoom(0, clientNickname);
+                string userListLobbyMsg = "USER_LIST:0:" + userListLobby + "\n";
+                send(clientSocketFD, userListLobbyMsg.c_str(), userListLobbyMsg.length(), 0);
+
+                cout << "Client " << clientNickname << " left room '" << oldRoomNumber << "' and moved to lobby (room 0)." << endl;
+            } else {
+                string response = "INFO: You are already in the lobby.\n";
+                send(clientSocketFD, response.c_str(), response.length(), 0);
+            }
+        }
+        return true;
+    }
+
+    return false;
+}
+
+
 void HandlingSocket(AcceptedSocket acceptedSocket) {
-    string clientNickname = "UnnamedClient_" + to_string(acceptedSocket.acceptedSocketFD);
+    string clientNickname = "";
+    int currentClientRoomNumber = 0;
 
     string nicknameRequest = "NICK_REQUIRED\n";
     send(acceptedSocket.acceptedSocketFD, nicknameRequest.c_str(), nicknameRequest.length(), 0);
@@ -63,16 +189,10 @@ void HandlingSocket(AcceptedSocket acceptedSocket) {
             goto cleanup_socket;
         }
 
-        string receivedMessage(buffer);
-        size_t last_char_pos = receivedMessage.find_last_not_of(" \n\r\t");
-        if (last_char_pos == string::npos) {
-            receivedMessage.clear();
-        } else {
-            receivedMessage.resize(last_char_pos + 1);
-        }
+        string receivedMessage = trim(buffer);
 
         if (receivedMessage.rfind("NICK ", 0) == 0) {
-            string proposedNickname = receivedMessage.substr(5);
+            string proposedNickname = trim(receivedMessage.substr(5));
 
             if (proposedNickname.empty() || proposedNickname.length() > 20) {
                 string response = "NICK_REJECTED: Nickname invalid (empty or too long).\n";
@@ -80,36 +200,38 @@ void HandlingSocket(AcceptedSocket acceptedSocket) {
                 continue;
             }
 
-            {
-                lock_guard<mutex> lock(nicknamesMutex);
+            string tempNickname = proposedNickname;
+            int tempRoomNumber = 0;
 
-                bool nicknameTaken = false;
-                for (const auto& pair : clientNicknames) {
-                    if (pair.second == proposedNickname) {
+            bool nicknameTaken = false;
+            {
+                lock_guard<mutex> lock(clientStatesMutex);
+                for (const auto& pair : clientStates) {
+                    if (pair.second.nickname == proposedNickname) {
                         nicknameTaken = true;
                         break;
                     }
                 }
 
-                if (nicknameTaken) {
-                    string response = "NICK_REJECTED: Nickname '" + proposedNickname + "' is already taken.\n";
-                    send(acceptedSocket.acceptedSocketFD, response.c_str(), response.length(), 0);
-                } else {
+                if (!nicknameTaken) {
                     clientNickname = proposedNickname;
-                    clientNicknames[acceptedSocket.acceptedSocketFD] = clientNickname;
+                    currentClientRoomNumber = tempRoomNumber;
+                    clientStates[acceptedSocket.acceptedSocketFD] = {clientNickname, currentClientRoomNumber};
                     nicknameSet = true;
-                    string response = "NICK_ACCEPTED\n";
-                    send(acceptedSocket.acceptedSocketFD, response.c_str(), response.length(), 0);
-                    cout << "Client " << acceptedSocket.acceptedSocketFD << " set nickname to '" << clientNickname << "'." << endl;
-
-                    {
-                        lock_guard<mutex> clientLock(clientSocketsMutex);
-                        connectedClientSockets.push_back(acceptedSocket.acceptedSocketFD);
-                    }
-                    cout << "Client " << acceptedSocket.acceptedSocketFD << " added to connected list. Total: " << connectedClientSockets.size() << endl;
-
-                    broadcastMessage(clientNickname + " has joined the chat.\n", acceptedSocket.acceptedSocketFD);
                 }
+            }
+
+            if (nicknameTaken) {
+                string response = "NICK_REJECTED: Nickname '" + tempNickname + "' is already taken.\n";
+                send(acceptedSocket.acceptedSocketFD, response.c_str(), response.length(), 0);
+            } else {
+                string response = "NICK_ACCEPTED\n";
+                send(acceptedSocket.acceptedSocketFD, response.c_str(), response.length(), 0);
+                cout << "Client " << acceptedSocket.acceptedSocketFD << " set nickname to '" << clientNickname << "' and is in lobby (room " << currentClientRoomNumber << ")." << endl;
+
+                string userList = getUsersInRoom(currentClientRoomNumber, clientNickname);
+                string userListMsg = "USER_LIST:" + to_string(currentClientRoomNumber) + ":" + userList + "\n";
+                send(acceptedSocket.acceptedSocketFD, userListMsg.c_str(), userListMsg.length(), 0);
             }
         } else {
             string response = "ERROR: Please send your nickname using 'NICK <your_name>'.\n";
@@ -125,49 +247,62 @@ void HandlingSocket(AcceptedSocket acceptedSocket) {
         if (bytesReceived == SOCKET_ERROR) {
             int error_code = WSAGetLastError();
             if (error_code == WSAECONNRESET || error_code == WSAENOTSOCK) {
-                cout << clientNickname << " disconnected unexpectedly (Error: " << error_code << ")." << endl;
+                cout << "Client " << acceptedSocket.acceptedSocketFD << " ('" << clientNickname << "') disconnected unexpectedly (Error: " << error_code << ")." << endl;
             } else {
-                cerr << "recv failed for client " << clientNickname << " with error: " << error_code << endl;
+                cerr << "recv failed for client " << acceptedSocket.acceptedSocketFD << " ('" << clientNickname << "') with error: " << error_code << endl;
             }
             break;
         } else if (bytesReceived == 0) {
-            cout << "Client " <<  clientNickname << " disconnected gracefully." << endl;
+            cout << "Client " << acceptedSocket.acceptedSocketFD << " ('" << clientNickname << "') disconnected gracefully." << endl;
             break;
         }
 
-        buffer[bytesReceived] = '\0';
-        string receivedMessage(buffer);
-        size_t last_char_pos = receivedMessage.find_last_not_of(" \n\r\t");
-        if (last_char_pos != string::npos) {
-            receivedMessage.resize(last_char_pos + 1);
-        } else {
-            receivedMessage.clear();
+        string receivedMessage = trim(buffer);
+
+        {
+            lock_guard<mutex> lock(clientStatesMutex);
+            auto it = clientStates.find(acceptedSocket.acceptedSocketFD);
+            if (it != clientStates.end()) {
+                currentClientRoomNumber = it->second.currentRoomNumber;
+            } else {
+                cerr << "Error: Client " << clientNickname << " not found in clientStates map during chat loop." << endl;
+                break;
+            }
         }
 
-        cout <<  clientNickname << " : " << receivedMessage << endl;
+        if (receivedMessage.rfind("COMMAND:", 0) == 0) {
+            handleClientCommand(acceptedSocket.acceptedSocketFD, receivedMessage, clientNickname);
+        } else {
+            cout << "Received from client " << acceptedSocket.acceptedSocketFD << " ('" << clientNickname << "') in room '" << currentClientRoomNumber << "': " << receivedMessage << endl;
 
-        string messageToBroadcast = clientNickname + ": " + receivedMessage + "\n";
-        broadcastMessage(messageToBroadcast, acceptedSocket.acceptedSocketFD);
+            string messageToBroadcast = clientNickname + ": " + receivedMessage + "\n";
+            broadcastMessage(messageToBroadcast, acceptedSocket.acceptedSocketFD, currentClientRoomNumber);
+        }
     }
 
 cleanup_socket:
-    {
-        lock_guard<mutex> clientLock(clientSocketsMutex);
-        connectedClientSockets.erase(remove_if(connectedClientSockets.begin(), connectedClientSockets.end(),
-                                                    [fd = acceptedSocket.acceptedSocketFD](SOCKET s) { return s == fd; }),
-                                     connectedClientSockets.end());
-    }
+    string disconnectedNickname = clientNickname;
+    int disconnectedRoomNumber = currentClientRoomNumber;
+    bool wasInRoom = false;
 
     {
-        lock_guard<mutex> nicknameLock(nicknamesMutex);
-        if (clientNicknames.count(acceptedSocket.acceptedSocketFD)) {
-            string disconnectedNickname = clientNicknames[acceptedSocket.acceptedSocketFD];
-            clientNicknames.erase(acceptedSocket.acceptedSocketFD);
-            cout << "Client " <<  disconnectedNickname << " removed from lists. Total: " << connectedClientSockets.size() << endl;
-            broadcastMessage(disconnectedNickname + " has left the chat.\n", acceptedSocket.acceptedSocketFD);
+        lock_guard<mutex> lock(clientStatesMutex);
+        auto it = clientStates.find(acceptedSocket.acceptedSocketFD);
+        if (it != clientStates.end()) {
+            disconnectedNickname = it->second.nickname;
+            disconnectedRoomNumber = it->second.currentRoomNumber;
+            if (disconnectedRoomNumber != 0) {
+                wasInRoom = true;
+            }
+            clientStates.erase(it);
+            cout << "Client " << acceptedSocket.acceptedSocketFD << " ('" << disconnectedNickname << "') removed from lists. Total clients: " << clientStates.size() << endl;
         } else {
-            cout << "Client " << acceptedSocket.acceptedSocketFD << " (nickname not set) removed from lists. Total: " << connectedClientSockets.size() << endl;
+            cout << "Client " << acceptedSocket.acceptedSocketFD << " (nickname not set/removed earlier) removed from lists. Total clients: " << clientStates.size() << endl;
         }
+    }
+
+    if (!disconnectedNickname.empty() && wasInRoom) {
+        broadcastMessage(disconnectedNickname + " has left room number '" + to_string(disconnectedRoomNumber) + "'.\n", acceptedSocket.acceptedSocketFD, disconnectedRoomNumber);
     }
 
     shutdown(acceptedSocket.acceptedSocketFD, SD_SEND);
