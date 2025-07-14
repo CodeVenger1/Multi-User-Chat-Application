@@ -10,6 +10,9 @@
 #include <vector>
 #include <mutex>
 #include <algorithm>
+#include <map>
+#include <condition_variable>
+#include <atomic>
 using namespace std;
 #pragma comment(lib, "Ws2_32.lib")
 
